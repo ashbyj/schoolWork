@@ -1,0 +1,652 @@
+---
+title: "C744 Data Mining and Analytics 2"
+output:
+  word_document: default
+  pdf_document: default
+  html_document:
+    theme: paper
+---
+
+```{r libraries, results=FALSE, message=FALSE}
+library(xlsx)
+library(ggplot2)
+library(plyr)
+library(corrplot)
+library(gridExtra)
+library(MASS)
+library(effects)
+library(FactoMineR)
+library(factoextra)
+```
+
+
+# Tool selection
+#### A. Why R?
+R has many benefits that make it an ideal choice for this analysis.  R is open source with a large community for support.  This allows for the creation of community packages like FactoMineR, where developers who use the software write packages designed to do their work (Tufféry, 2011, pg 124).  FactoMineR and ggplot2 are two packages that will be used in this analysis designed under the open source GNU-GPL license.  R is also a statistical language, designed specifically for this type of analysis with visualization libraries like ggplot2 available (Data Flair, 2019).
+
+#### B. Goal of analysis
+The goal of this analysis will be to find potential indicators that explain why customers leave a telecommunications company for their cable competitors.  This will be accomplished by identifying what customers who leave have in common and how they differ from those that don’t. These factors will be combined, ranked and scored to determine which have the strongest prediction power.  As exra value to the prediction, variables that describe customers will be reviewing, increasing the knowledge of this population's relationship to the telco.
+
+#### C. Which methods?
+
+A summary of the dataset supplied is below.
+
+```{r data load}
+custData <- read.table('initial data set.csv', header=TRUE, sep=',')
+str(custData)
+```
+
+Most of these variables will be transformed into binary factor variables, however,  there are other continuous variables that will be examined.  The dependent variable will be churn as this is a direct representation of whether a customer remains with this organization or not.  Analysis methods chosen will need to be suited to mixed data. 
+
+Logistic regression will be used as a non-descriptive method for this analysis. Binary logistic regression is appropriate for a prediction of a binary variable based on one or more continuous or binary variables (Tufféry, 2011).  For this analysis, our target variable will be the binomial factor variable Churn based on a set of other variables of mixed types.  
+
+Multiple correspondence analysis (MCA) will be used as a descriptive method for this analysis.  MCA is a type of factor analysis where the goal is reduce the dimensions of a problem while retaining as much information as possible (Tuffery, 2011).  MCA is especially useful when an analysis is needed of multiple qualitative variables.
+
+# Data exploration
+#### D. Target variable
+
+The target variable of this analysis is churn.  As the goal to to explain customer attrition, this variable is the best indicator of a customer's status with the company.  
+
+```{r, fig.width=4, fig.height=2, churnPlot}
+ggplot(custData, aes(y=Churn)) +
+  ggtitle('churn count of customers') + 
+  geom_bar(aes(x=..count..), width=0.5, fill='#2748b3', alpha=0.5) +
+  ylab('') + xlab('') +
+  theme_minimal() +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+```
+
+Churn is a binomial factor variable with yes and no as levels.
+
+#### E. Independent predictor variable
+
+One of the independent predictor variables available for this analysis is tenure.  This is the number of months a customer has been active with the company.  Tenure is a continuous, quantitative variable.
+
+```{r, fig.width=4, fig.height=5, tenurePlot}
+ggplot(custData, aes(x=tenure)) +
+  geom_histogram(binwidth=1, fill='#2748b3', alpha=0.5) +
+  ggtitle('tenure count of customers') +
+  ylab('') + xlab('') +
+  theme_minimal() +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+```
+
+Tenure has a bi modal distribution and will likely need to be binned during the analysis. 
+
+#### F. Data manipulation goals
+
+This data set will need to be cleaned and transformed to complete this analysis.  
+
+Cleaning will start by searching for aberrant or missing values.  Decisions will be made on how to proceed based on which variables have missing data and how many records have those variables missing.  Preference will be given to ignoring missing values when possible, then deleting records if a small enough percentage of them have missing values.  As a last resort, inference will be used to estimate the missing or aberrant values.  
+
+Many of the variables will also need to be transformed to be used in the methods selected.  For example, "no internet service" and "no" effectively have the same meaning in the OnlineBackup variable.  This also happens with MultipleLines and "no phone service".  The variables where this can be applied will be transformed to binary factor variables with yes/no values. 
+
+New variables will be created as transformations of existing variables.  For example, tenure will be binned.  Some variables may also be removed if they are found to be strongly correlated with other variables.
+
+#### G. Statistical identity 
+
+This data set includes many different data types.  customerID serves as a unique identifier for each record.
+
+```{r cusotmerID duplciate count}
+sum(duplicated(custData$customerID))
+```
+Churn will be the dependent variable.  As stated previously, Churn is a binomial factor variable with two levels.  The value of Churn is the phenomenon to be predicted.
+
+The data include three independent, continuous variables: MonthlyCharges, TotalCharges and Tenure (Tufféry, 2011)
+
+Finally, the remaining 16 variables are qualitative categorical variables with a varying number of levels. Each of these and their unique values are below. 
+
+```{r unique values in qualitative categoricals}
+discCat <- custData[,c(2:5, 7:18)]
+sapply(discCat, unique)
+```
+#### H. Clean the data
+The first step in cleaning will be to identify variables with missing values.  
+```{r variables with missing values}
+sapply(custData, function(x) sum(is.na(x)))
+```
+Only TotalCharges has missing values and only in 0.15% of the total observations.  If this variable is not removed by the end of the data cleaning, these observations will be removed.
+
+"No phone service" and "No internet service" will need to be converted to just "No".  These are functionally equivalent and combining them will limit the levels on these factors.
+
+```{r fix multiplelines}
+custData[custData=="No phone service"] <- "No"
+custData[custData=="No internet service"] <- "No"
+discCat <- custData[,c(2:5, 7:18)]
+sapply(discCat, unique)
+```
+Tenure can be binned by years.  This will limit the levels of this factor while maintaining the spread.
+
+```{r, fig.width=4, fig.height=4, tenureBins, warning=FALSE}
+
+min(custData$tenure)
+max(custData$tenure)
+
+tenureBins <- function(tenure){
+    if (tenure <= 12)
+      {return('year 1')}
+    if (tenure <= 24) 
+      {return('year 2')}
+    if (tenure <= 36) 
+      {return('year 3')}
+    if (tenure <= 48) 
+      {return('year 4')}
+    if (tenure <= 60) 
+      {return('year 5')}
+    return('year 6')
+}
+
+custData$tenureBin <- sapply(custData$tenure, tenureBins)
+
+## (Li, 2017)
+
+ggplot(custData, aes(x=tenureBin)) +
+  geom_histogram(fill='#2748b3', alpha=0.5, stat="count") +
+  ggtitle('tenure count of customers') +
+  ylab('') + xlab('') +
+  theme_minimal() +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+```
+
+Although not strictly necessary, SeniorCitizen can also be converted to yes/no instead of 0/1 to match the other factor variables.
+
+```{r SeniorCitizen 01 to yesno}
+custData$SeniorCitizen[custData$SeniorCitizen==0] <- "No"
+custData$SeniorCitizen[custData$SeniorCitizen==1] <- "Yes"
+```
+
+Removing strongly correlated variables will ensure that these attributes don't have an undue weight in any models generated.
+
+```{r}
+numerics <- sapply(custData, is.numeric)
+custData <- custData[complete.cases(custData), ]
+matrix <- cor(custData[,numerics])
+# (li, 2017)
+corrplot(matrix, tl.pos='d', cl.pos='n', method='number', type='lower')
+```
+
+The correlation between tenure and TotalCharges is more than 0.8 and very risky (Tufféry, 2011).  As TotalCharges also has missing values, it will be removed in favor of tenure.
+
+The next step in cleaning this data will be to remove the customerID.  It won't be used as identifying an individual customer will not be necessary.  Tenure was transformed into a factor variable with years as levels and is also no longer needed.  
+
+```{r remove customerID}
+custData <- within(custData, rm(customerID, tenure, TotalCharges))
+```
+
+The last step will be to convert the various factor variables into factors so that R will handle them appropriately.
+
+```{r create factor variables}
+factorCol <- c(1:16,18,19)
+custData[factorCol] <- lapply(custData[factorCol], as.factor)
+```
+
+# Data Analysis
+
+#### I. Univariate variable distributions
+
+Each of the remaining variables will be visualized to identify their distribution.  Histograms and density plots show a variable's distribution well.  Churn and tenure have both already been visualized.
+
+```{r univariate plots 1 of 4, warning=FALSE}
+seniorCitizenPlot <- ggplot(custData, aes(x=SeniorCitizen)) + 
+      ggtitle('SeniorCitizen') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+genderPlot <- ggplot(custData, aes(x=gender)) + 
+      ggtitle('gender') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+partnerPlot <- ggplot(custData, aes(x=Partner)) + 
+      ggtitle('Partner') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+dependentsPlot <- ggplot(custData, aes(x=Dependents)) + 
+      ggtitle('Dependents') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+phoneServicePlot <- ggplot(custData, aes(x=PhoneService)) + 
+      ggtitle('PhoneService') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+multipleLinesPlot <- ggplot(custData, aes(x=MultipleLines)) + 
+      ggtitle('MultipleLines') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+grid.arrange(seniorCitizenPlot, genderPlot, partnerPlot, 
+             dependentsPlot, phoneServicePlot, multipleLinesPlot,
+             ncol=3)
+```
+
+```{r univariate plots 2 of 4, warning=FALSE}
+internetServicePlot <- ggplot(custData, aes(x=InternetService)) + 
+      ggtitle('InternetService') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+  
+onlineSecurityPlot <- ggplot(custData, aes(x=OnlineSecurity)) + 
+      ggtitle('OnlineSecurity') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+deviceProtectionPlot <- ggplot(custData, aes(x=DeviceProtection)) + 
+      ggtitle('DeviceProtection') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+onlineBackupPlot <- ggplot(custData, aes(x=OnlineBackup)) + 
+      ggtitle('OnlineBackup') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+techSupportPlot <- ggplot(custData, aes(x=TechSupport)) + 
+      ggtitle('TechSupport') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+streamingMoviesPlot <- ggplot(custData, aes(x=StreamingMovies)) + 
+      ggtitle('StreamingMovies') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+grid.arrange(internetServicePlot, onlineSecurityPlot, deviceProtectionPlot,
+             onlineBackupPlot, techSupportPlot, streamingMoviesPlot,
+             ncol=3)
+```
+
+```{r univariate plots 3 of 4, warning=FALSE}
+streamingTVplot <- ggplot(custData, aes(x=StreamingTV)) + 
+      ggtitle('StreamingTV') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+paperlessBillingplot <- ggplot(custData, aes(x=PaperlessBilling)) + 
+      ggtitle('PaperlessBilling') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+monthlyChargesPlot <- ggplot(custData, aes(x=MonthlyCharges)) + 
+  ggtitle("MonthlyCharges") + 
+  xlab("dollars") + ylab("") +
+  geom_density(fill='#2748b3', alpha=0.5) + 
+  theme_minimal() +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+grid.arrange(streamingTVplot, streamingMoviesPlot, paperlessBillingplot, 
+             monthlyChargesPlot,
+             ncol=2)
+
+summary(custData$MonthlyCharges)
+```
+
+For MonthlyCharges, there are no outliers.  However, there are 3 distinct groups.  It should be possible to convert MonthlyCharges into a factor variable by using a histogram to find the appropriate group boundaries.
+
+```{r monthly charges histogram}
+ggplot(custData, aes(x=MonthlyCharges)) +
+  geom_histogram(binwidth = 1, fill='#2748b3', color="black", alpha=0.5) +
+  ggtitle("MonthlyCharges grouping search") +
+  theme_minimal() +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())  
+
+```
+
+The groupings break around $44 and $69.  
+
+```{r bin monthlycharges, fig.height=4, fig.width=4, warning=FALSE}
+mcBins <- function(MonthlyCharges){
+    if (MonthlyCharges < 44)
+      {return('tier 1')}
+    if (MonthlyCharges < 69) 
+      {return('tier 2')}
+    return('tier 3')
+}
+
+custData$monthlyChargesBin <- sapply(custData$MonthlyCharges, mcBins) 
+custData$monthlyChargesBin <- as.factor(custData$monthlyChargesBin)
+custData <- within(custData, rm(MonthlyCharges))
+
+ggplot(custData, aes(x=monthlyChargesBin)) + 
+  ggtitle('monthlyChargesBin') + 
+  geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+  ylab('') + xlab('') +
+  theme_minimal() +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+```
+
+```{r, univariate plots 4 of 4, warning=FALSE}
+contractPlot <- ggplot(custData, aes(x=Contract)) + 
+      ggtitle('Contract') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      coord_flip() + 
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+paymentMethodPlot <- ggplot(custData, aes(x=PaymentMethod)) + 
+      ggtitle('PaymentMethod') + 
+      geom_histogram(stat="count", fill='#2748b3', color="black", alpha=0.5) + 
+      ylab('') + xlab('') +
+      coord_flip() +
+      theme_minimal() +
+      theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+
+grid.arrange(contractPlot, paymentMethodPlot)
+```
+
+#### J. Bivariate variable statistics
+
+For the bivariate analysis, each of the independent categorical variables will be compared the the dependent variable, churn using a chi-squared test for independence.
+
+```{r chi squared calcs}
+
+chisq.test(custData$gender, custData$Churn, correct=FALSE)
+chisq.test(custData$SeniorCitizen, custData$Churn, correct=FALSE)
+chisq.test(custData$Partner, custData$Churn, correct=FALSE)
+chisq.test(custData$Dependents, custData$Churn, correct=FALSE)
+chisq.test(custData$PhoneService, custData$Churn, correct=FALSE)
+chisq.test(custData$MultipleLines, custData$Churn, correct=FALSE)
+chisq.test(custData$InternetService, custData$Churn, correct=FALSE)
+chisq.test(custData$OnlineSecurity, custData$Churn, correct=FALSE)
+chisq.test(custData$OnlineBackup, custData$Churn, correct=FALSE)
+chisq.test(custData$DeviceProtection, custData$Churn, correct=FALSE)
+chisq.test(custData$TechSupport, custData$Churn, correct=FALSE)
+chisq.test(custData$StreamingTV, custData$Churn, correct=FALSE)
+chisq.test(custData$StreamingMovies, custData$Churn, correct=FALSE)
+chisq.test(custData$Contract, custData$Churn, correct=FALSE)
+chisq.test(custData$PaperlessBilling, custData$Churn, correct=FALSE)
+chisq.test(custData$PaymentMethod, custData$Churn, correct=FALSE)
+chisq.test(custData$tenureBin, custData$Churn, correct=FALSE)
+chisq.test(custData$monthlyChargesBin, custData$Churn, correct=FALSE)
+
+```
+
+Churn looks to be dependent on most of the remaining variables, with the exception of gender and PhoneService.  These variables will remain in the analysis as its possible a multi-variate analysis will find different results.
+
+The relationship between contract and churn is visualized below.  Correlation plots on the residuals will show which cells from the contingency tables contributed most to X-squared (STHDA, 2016).
+
+```{r contract plots}
+chi <- chisq.test(custData$Contract, custData$Churn, correct=FALSE)
+corrplot(chi$residuals, is.corr=FALSE, method='number', cl.pos='n')
+```
+
+Not surprisingly, customers in some form of contract tend to stay and customers not in a contract are more likely to churn.  These types of plots will be easiest to read and understand when the degrees of freedom is small.  For a result with more degrees of freedom, such as tenureBin, stacked bars can help aid in comparisons.
+
+```{r tenureBin stacked bar}
+ggplot(custData, aes(fill=Churn, y=..count.., x=tenureBin)) +
+  geom_bar(position='stack', stat='count', alpha=0.5, color='black') +
+  scale_fill_manual(values=c('#bdc9de','#2748b3')) +
+  xlab('') + ylab('') + 
+  theme_minimal() +
+  theme(panel.grid.major=element_blank(), panel.grid.minor=element_blank())
+```
+
+It seems that the longer a customer is with the organization, the less likely they are to churn.  The first year is especially susceptible to churn.
+
+#### K. Methods applied
+
+##### Logistic regression
+
+The analytic method will begin by applyint R's GLM function to the data while retaining a portion to test with as well.  The data can be split into a training set to train the model and then a test set to test the accuracy.  A 70/30 split was used.
+
+```{r initial logistic regression model}
+row70 <- floor(0.7 * nrow(custData))
+set.seed(2020) #for repeatability
+trainRows <- sample(seq_len(nrow(custData)), size=row70)
+
+trainSet <- custData[trainRows,]
+testSet <- custData[-trainRows,]
+
+logReg <- glm(Churn ~ ., data=trainSet, family='binomial')
+summary(logReg)
+```
+
+There are many variables that have very little impact impact on the model.  The median of the deviance residuals is close to 0 and the first and 3rd quartiles are very close to symmetrical.  However, the min and max are not close to symmetrical.  The initial look at this model is a reasonably good fit, but could be improved (starmer, 2018).  An r-squared approximation and associated p-value will be paired with the AIC score to make sure any additional steps are improvements to the fit.  Prediction accuracy on the data partition held back for testing will also be reviewed. 
+
+```{r initial logReg scores}
+ll.null <- logReg$null.deviance/-2 
+ll.proposed <- logReg$deviance/-2
+print(paste("McFadden's pseudo r-squared: ", (ll.null - ll.proposed) / ll.null))
+print(paste('p-value: ', 
+     1 - pchisq(2*(ll.proposed - ll.null), df=(length(logReg$coefficients)-1))))
+
+testSet$Churn <- as.character(testSet$Churn)
+testSet$Churn[testSet$Churn=="No"] <- "0"
+testSet$Churn[testSet$Churn=="Yes"] <- "1"
+fitted <- predict(logReg, newdata=testSet, type='response')
+fitted <- ifelse(fitted > 0.5, 1, 0)
+errorRate <- mean(fitted != testSet$Churn)
+print(paste('model accuracy: ', 1 - errorRate)) # (Li, 2017)
+```
+
+With so many variables having low coefficients and high p-values in the model, an ANOVA test can be run on the deviances to estimate how much each variable contributes to the model.
+
+```{r initial logReg analysis of deviance}
+anova(logReg, test='Chisq')
+```
+
+In the model, InternetService clears the most deviance from the null model.  Contract, OnlineSecurity and tenureBin also have strong predictor power.  A model with just these 4 predictors may be easier to understand and therefore more valuable if it has a similar predictive power.
+
+```{r trimmed model}
+trimTrain <- trainSet[c(7,8,14,18,17)]
+trimTest <- testSet[c(7,8,14,18,17)]
+
+logRegTrim <- glm(Churn ~ ., data=trimTrain, family='binomial')
+summary(logRegTrim)
+
+ll.null <- logReg$null.deviance/-2 
+ll.proposed <- logReg$deviance/-2
+print(paste("McFadden's pseudo r-squared: ", (ll.null - ll.proposed) / ll.null))
+print(paste('p-value: ', 
+     1 - pchisq(2*(ll.proposed - ll.null), 
+                df=(length(logRegTrim$coefficients)-1))))
+
+fitted <- predict(logRegTrim, newdata=trimTest, type='response')
+fitted <- ifelse(fitted > 0.5, 1, 0)
+errorRate <- mean(fitted != trimTest$Churn)
+print(paste('model accuracy: ', 1 - errorRate)) # (Li, 2017)
+anova(logRegTrim, test='Chisq')
+```
+
+This model has slightly tighter deviance residuals, a very similar AIC and McFadden's pseudo r-squared. The prediction accuracty is only 1.5 percentage points lower the data set aside for testing.  This simpler model may ultimately be more valuable as it is easier to understand.  Visualizing the effect of the probability for each level of the predictor variables can also help to explain the model.  
+
+
+```{r plot the model, fig.width=8, fig.height=10}
+plot(allEffects(logRegTrim))
+```
+
+##### Multiple correspondence analysis
+
+One style of MCA allows qualitative variables to be divided into two categories: active and supplemental.  This data has a natural partition on demographic and telco relationship variables.  Gender, SeniorCitizen, Partner and Dependents will used as supplemental variables and the remaining variables will be active.  Since 15 variables will be interpreted, any dimensions with less than 7% of the total variance can be discarded (Housson, 2016).  
+
+```{r, fig.show='hide'}
+custFactor <- MCA(custData, quali.sup=c(1:4))
+```
+
+```{r }
+fviz_eig(custFactor, addlabels=TRUE, barfill='#8FB3CB')
+```
+
+In this case, the only pair of dimensions where both have more than 7% of the total variance is dimensions 1 and 2.  These will be the focus of the rest of this part of the analysis.
+
+For MCA, it is important that the dimensions are centered and distributed in a uniform cloud around zero.  The point cloud of individuals will show this (STHDA, 2017).  
+
+```{r point cloud for individuals}
+fviz_mca_ind(custFactor, label='none', col.ind='#2748b3', alpha.ind=0.5)
+```
+
+The point cloud seems to be centered and uniformly distributed across dimensions one and two.
+
+Viewing each variable's contribution to these dimensions may give additional insight.  Only the 10 variables with the largest contribution are shown in the figures below.
+
+```{r}
+dim1 <- fviz_contrib(custFactor, choice='var', top=10, axes=1, fill='#8FB3CB')
+dim2 <- fviz_contrib(custFactor, choice='var', top=10, axes=2, fill='#8FB3CB')
+grid.arrange(dim1, dim2, ncol=2)
+```
+
+customers with the lowest tier of monthly charges are associated to those without internet service on the first dimension.  For the second dimension, customers who have churned are associated to those with a two year contract.  
+
+The correlation between these variables and these dimensions can also be plotted to compare the correlation of each variable to both dimensions.  The supplemental variables have been suppressed as they do not contribute to the dimensions.
+
+```{r correlation plot for variables}
+fviz_mca_var(custFactor, 
+             choice = "mca.cor",
+             col.var='#2748b3',
+             repel=TRUE,
+             select.var=list(name=colnames(custData[5:19]))
+            )
+```
+
+Contract plays a strong role in dimension 2, but is relatively weak in dimension 1.  InternetService is is significant in both dimensions.
+
+A biplot of individuals and categories will help to visualize these dimensions as well.
+
+```{r}
+fviz_mca_biplot(custFactor, geom.ind='point', col.ind='#8FB3CB', alpha.ind=0.3,
+                geom.var='text', repel=TRUE, label='var', 
+                invisible='quali.sup', select.var=list(contrib=15),
+                col.var='black')
+```
+
+This plot shows the similarity of individuals and variables in this set.  The distance between points represents how similar the points are.  
+
+Finally, single variables can also be examined in this form.  In the plot below, the ellipses represent the different levels of the InternetService variable.
+
+```{r ellipses}
+grouping <- as.factor(custData[,"InternetService"])
+fviz_mca_ind(custFactor, habillage=grouping, addEllipses=TRUE, label='none',
+             alpha.ind=0.1, title='InternetService groupings')
+```
+
+#### L. Method justification
+As the goal was to identify which customers are leaving the telco and attempt to mitigate continued customer loss, a predictive method was needed to identify customers that were at risk leaving so extra care could be given to maintain them.  Logistic regression was selected as a non-descriptive and predictive method to attempt to predict the value of Churn.  Logistic regression was especially suited to this task as it performs well on binary factors and is considered more transparent and easier to explain than other methods (Tufféry, 2011).  Multiple linear regression is better suited for continuous variables, where the majority of the variables in the given set were discrete factors.  A neural network may also have been appropriate for this prediction task, however, they are not well suited to categorical variables without some additional preparation, have difficulty with large numbers of variables and lack the transparency of logistic regression.  Explaining how the network converged can also be difficult, making the task of troubleshooting or fine-tuning them not as transparent as logistic regression.
+
+As part of identifying characteristics of customer who leave the telco, component analysis could also add value in that it segments customers who have similarities and describes the customer base in ways that may not be initially understood.  The data did include several different data types, making Multiple Correspondence Analysis (MCA) the correct choice for component analysis (Tufféry, 2011).  Principal Component Analysis (PCA) requires continuous and qualitative variables.  Many of the given variables were discrete factors.  Clustering analysis methods may also be useful, however, they do require continuous variables.  Categorical data must first be transformed through MCA.  This work may be continued using these methods.  Association analysis would also be appropriate in the presence of data from many more customers (Tufféry, 2011).  Given the parameters of this task, MCA was the correct initial choice to describe the telco's customers.
+
+#### M. Visualization justification
+
+##### Univariate analysis 
+Bar charts and histograms show the distribution of individual across levels of factor variables well.  Single stacked bars or pie charts also have this same goal, but these can distort the proportion of the whole each level represents and make comparisons between the levels difficult.  Density plots represent the distribution of continuous values well as they highlight the area under their curves, aiding with the intuitive understanding of counts similarly to a bar chart.  Line plots also visualize continuous variables well, but it can be difficult to estimate the slope or area under the curve at a glance with line plots.  
+
+##### Bi-variate analysis 
+Stacked bar charts are especially useful for comparing 2 categorical variables as they quickly show the distribution of a variable in reference to another.  Scatter plots are also available, but work best with at least one continuous variable.  Jitter has to be introduced when categorical variables are used in a scatter plot and this can be easy to misinterpret.  Occasionally, when there are very few categories available in a categorical variable, a heat table is also appropriate as it is easy to tell the difference and understand the scale between a few plainly written numbers.  As the number of categories grow, a heat table becomes more cluttered and other methods are needed.  Pie charts and donut charts are also sometimes used in specific circumstances, but it can be difficult to distinguish the ratio between categories on these chart types as the area of a wedge or circle is less intuitive for most people than the length of a rectangle.
+
+##### Logistic Regression 
+The effects plot was chosen to highlight the differences in the predicted probabilities from the various levels of the factors included.  As a bonus, the plot also includes the 95% error bars to gauge the uncertainty of the estimate (Ford, 2016).  The conventional signmoid curve visualization would have also been appropriate, but these can get overloaded and difficult to inperpret as variables are added to the model.  Adding confidence interval bands compounds this.
+
+##### MCA 
+The scree plot was selected for a similar reson to the bar charts in the univariate analysis.  This goal is to display what part each dimension has in the total variance. The line and labels were added to highlight the 7% cutoff for dimension usefulness.  Pie or donut charts would have been especially inappropriate here as the many of the wedges would have been too small to see.  The point cloud, bi-plot and InternetService grouping scatterplots were selected as this type of plot is especially useful in bivariate comparisons where the distribution of variables is important.  Individual histograms, bar charts, or area charts would have possibly been better fits for any one of this visualizations.  However, when taken as a whole, the scatterplot provides a continuous view to explore and identify relationships.
+
+# Data summary
+
+#### N. Was the data discriminating?
+
+This data was discriminating as seen in the analysis of deviance tables from the logistic regression.  The final model included four discriminating variables with significant p-values.  
+
+```{r logRegTrim anova 2}
+anova(logRegTrim, test='Chisq')
+```
+
+The phenomenon of similarities between customers was found and outlined during the MCA analysis.  
+
+```{r}
+dim1 <- fviz_contrib(custFactor, choice='var', top=10, axes=1, fill='#8FB3CB')
+dim2 <- fviz_contrib(custFactor, choice='var', top=10, axes=2, fill='#8FB3CB')
+grid.arrange(dim1, dim2, ncol=2)
+```
+
+Customers with the lowest monthly charges also do not have internet service. 
+
+#### O. Detect interactions and strong predictors
+
+Chi-squared tests were used to detect interactions between variables.  These tests compared the observed frequencies of interaction between two qualitative variables and the expected frequencies if they were independent.  A high test statistic indicates there is some interaction between those variables.  Contract and tenure were both found to have strong interactions with churn.  The p-value of these test statistics were significant.
+
+```{r}
+chisq.test(custData$Contract, custData$Churn, correct=FALSE)
+chisq.test(custData$tenureBin, custData$Churn, correct=FALSE)
+```
+
+To select the most important predictor variables, an Analysis of Deviance was run on the initial logistic regression model.  The variables with the highest explained deviance that had an appropriate p-value were selected and all other variables were trimmed from the model.  The Analysis of Deviance for the resulting model was then checked and all variables were found to be significant.
+
+Analysis of Deviance before trimming
+```{r analysis of deviance before trimming}
+anova(logReg, test='Chisq')
+```
+Analysis of Deviance after trimming.
+```{r analysis of deviance after trimming}
+anova(logRegTrim, test='Chisq')
+```
+
+
+
+
+
+# References
+
+Data Flair (2019) Why Learn R? 10 Handy Reason to Learn R programming Language.
+    Retrieved from https://data-flair.training/blogs/why-learn-r/
+
+Ford, Clay (2016), Visualizing the Effects of Logistic Regression
+    Retrieved from https://data.library.virginia.edu/visualizing-the-effects-of-logistic-regression/
+
+Housson, Fracois, (2016) Multiple Correspondence Analysis Playlist 
+    [Video Files]. Retrieved from
+    https://www.youtube.com/watch?v=gZ_7WWEVlTg&list=PLnZgp6epRBbTVjKd_-KPhaGWLE7K7InL6
+
+Li, Susan (2017), Predict Customer Churn - Logistic Regression, Decision Tree 
+    and Random Forest, 
+    Retrieved from https://datascienceplus.com/predict-customer-churn-logistic-regression-decision-tree-and-random-forest/
+
+Starmer, Josh (2018) Logistic Regression Playlist [Video Files].  Retrieved from
+    https://www.youtube.com/watch?v=xxFYro8QuXA&list=PLblh5JKOoLUKxzEP5HA2d-Li7IJkHfXSe&index=4
+
+STHDA (2016), Chi-Square Test of Independence in R, 
+    Retrieved from http://www.sthda.com/english/wiki/chi-square-test-of-independence-in-r
+    
+STHDA (2017), MCA - Multiple Correspondence Analysis in R: Essentials
+    Retrieved from https://goo.gl/ve3WBa
+
+Tufféry, S. (2011). Data Mining and Statistics for Decision Making 
+    [VitalSource Bookshelf version]. Retrieved from vbk://9780470979280
+
+# Cleaned data set
+
+Export of the cleaned data set.
+
+```{r export cleaned data}
+write.xlsx2(custData, 'finalData.xlsx', sheetName = 'final', col.name = TRUE, 
+            row.names = FALSE)
+```
+
