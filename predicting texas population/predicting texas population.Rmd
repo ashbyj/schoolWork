@@ -1,0 +1,95 @@
+---
+title: "C997 task submission"
+author: "Jesse Ashby"
+output:
+  word_document: default
+  html_document: default
+  pdf_document: default
+---
+
+##Section B - Data preparation and import into R
+
+I downloaded the April 1, 2010 to July 1, 2018 census data from the site 
+specified in the task requirements (United States Census Bureau, 2018).   The 
+file was setup with one row per geographic summary level and had columns for 
+population estimates for each year between 2010 and 2018.  The components of 
+each year's estimate also each had their own columns. 
+
+My goal in preparing the data for import into R was to extract only the relevant 
+data and then transform it to meet the rules of tidy data (Grolemund & Wickham, 
+2017).  I started by opening the file in Microsoft Excel and removing all of the
+rows that were not for the state I live in (Texas). I then removed all columns 
+except for the population estimate for each year.  This left me with 1 row and 9
+columns.  I pivoted this row to 9 rows in 1 column.  This setup my response 
+variable of population estimate, but I lacked the needed explanatory variable of
+time.  I added a new column and manually entered the year of the population 
+estimate.
+
+To import the data into R, I used the read_csv function to get the data into a 
+tibble data structure, useful for working with data in the tidy format.  
+
+```{r echo = TRUE, warning = FALSE, message = FALSE, tidy = TRUE, dataImport}
+library(tidyverse)
+
+pops <- read_csv("texasPopEstimates.csv")
+pops
+```
+
+##Section A - Linear regression analysis
+
+```{r echo = TRUE, warning = FALSE, message = FALSE, tidy = TRUE, linearModel}
+library(modelr)
+require(scales)
+
+# (Grolemund & Wickham, 2017) 
+popsModel <- lm(popestimate ~ year, data = pops)
+popsModel
+
+vis <- ggplot(pops, aes(year, popestimate)) +
+  geom_point() + 
+  scale_y_continuous (labels = comma) + 
+  ylab('population') +
+  geom_smooth(method = "lm", se = FALSE) 
+
+vis
+```
+
+
+##Section C - Statistical description using summary()
+
+```{r echo = TRUE, warning = FALSE, message = FALSE, tidy = TRUE, summary}
+summary(popsModel)
+```
+
+##Section D - 5 year prediction for population of Texas
+
+```{r}
+next5years <- data_frame('year' = c((max(pops$year) + 1): (max(pops$year) + 5)))
+next5pops <- data_frame('popestimate' = predict(popsModel, next5years, 
+                                                type = "response"))
+next5estimates <- data.frame('years' = next5years, 'popestimate' = next5pops)
+pops <- rbind(pops, next5estimates)
+
+vis <- ggplot(pops, aes(year, popestimate)) +
+  geom_point() + 
+  geom_text(aes(label=ifelse(year == max(pops$year),
+                             as.character(as.integer(pops$popestimate)),'')),
+            hjust=1.5) + 
+  scale_y_continuous (labels = comma) + 
+  ylab('population') +
+  geom_smooth(method = "lm", se = FALSE) 
+
+vis
+
+```
+
+##References:
+
+Grolemund, G, and Wickham, H. "R For Data Science." R For Data Science, 
+  O'Reilly, 2017, r4ds.had.co.nz/index.html.
+
+United States Census Bureau. (2018).  National, State, and Puerto Rico 
+  Commonwealth Totals Datasets: Population, population change, and estimated 
+  components of population change: April 1, 2010 to July 1, 2018 [CSV file]. 
+  Retrieved from https://www2.census.gov/programs-surveys/popest/datasets/2010-2018/national/totals/nst-est2018-alldata.csv
+
